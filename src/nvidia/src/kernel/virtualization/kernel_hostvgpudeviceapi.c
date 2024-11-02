@@ -27,7 +27,6 @@
 #include "core/core.h"
 #include "core/locks.h"
 #include "os/os.h"
-#include "virtualization/kernel_hostvgpudeviceapi.h"
 #include "dev_ctrl_defines.h"
 #include "mem_mgr/mem.h"
 #include "kernel/gpu/bif/kernel_bif.h"
@@ -87,6 +86,7 @@ kernelhostvgpudeviceapiConstruct_IMPL
     RsShared *pShared;
     Device *pDevice;
     RsClient *pClient = NULL;
+    NvBool bPreserveLogBufferFull = NV_FALSE;
 
     // Forbid allocation of this class on Guest-RM
     // to avoid fuzzing this class in such cases. See bug 3529160.
@@ -247,7 +247,8 @@ kernelhostvgpudeviceapiConstruct_IMPL
                                                                  pBootloadParams->initTaskLogBuffOffset,
                                                                  pBootloadParams->initTaskLogBuffSize,
                                                                  pBootloadParams->vgpuTaskLogBuffOffset,
-                                                                 pBootloadParams->vgpuTaskLogBuffSize),
+                                                                 pBootloadParams->vgpuTaskLogBuffSize,
+                                                                 &bPreserveLogBufferFull),
                                 done);
         }
 
@@ -273,6 +274,13 @@ kernelhostvgpudeviceapiConstruct_IMPL
         status = pRmApi->Control(pRmApi, pGpu->hInternalClient, pGpu->hInternalSubdevice,
                                  NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
                                  pBootloadParams, sizeof(*pBootloadParams));
+
+        if (!bPreserveLogBufferFull)
+        {
+            // Preserve any captured vGPU Partition logs
+            NV_ASSERT_OK(kgspPreserveVgpuPartitionLogging(pGpu, pKernelGsp, pAllocParams->gfid));
+        }
+
         if (status != NV_OK)
         {
             NV_PRINTF(LEVEL_ERROR, "Failed to call NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK\n");
@@ -374,7 +382,7 @@ destroyKernelHostVgpuDeviceShare(OBJGPU *pGpu, KernelHostVgpuDeviceShr* pShare)
 {
 
     NV_CHECK_OR_RETURN_VOID(LEVEL_NOTICE, pShare != NULL);
-    
+
     KERNEL_HOST_VGPU_DEVICE *pKernelHostVgpuDevice = pShare->pDevice;
     RsShared *pShared = staticCast(pShare, RsShared);
     NvS32 refCount;

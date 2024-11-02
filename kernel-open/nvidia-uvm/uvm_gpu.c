@@ -138,6 +138,7 @@ static NV_STATUS get_gpu_caps(uvm_gpu_t *gpu)
 
     if (gpu_caps.numaEnabled) {
         UVM_ASSERT(uvm_parent_gpu_is_coherent(gpu->parent));
+
         gpu->mem_info.numa.enabled = true;
         gpu->mem_info.numa.node_id = gpu_caps.numaNodeId;
     }
@@ -1280,7 +1281,8 @@ static NV_STATUS init_gpu(uvm_gpu_t *gpu, const UvmGpuInfo *gpu_info)
 
     status = get_gpu_caps(gpu);
     if (status != NV_OK) {
-        UVM_ERR_PRINT("Failed to get GPU caps: %s, GPU %s\n", nvstatusToString(status), uvm_gpu_name(gpu));
+        if (status != NV_ERR_NVSWITCH_FABRIC_NOT_READY)
+            UVM_ERR_PRINT("Failed to get GPU caps: %s, GPU %s\n", nvstatusToString(status), uvm_gpu_name(gpu));
         return status;
     }
 
@@ -2256,7 +2258,10 @@ static void set_optimal_p2p_write_ces(const UvmGpuP2PCapsParams *p2p_caps_params
     bool sorted;
     NvU32 ce0, ce1;
 
-    if (peer_caps->link_type < UVM_GPU_LINK_NVLINK_1)
+    UVM_ASSERT(peer_caps->ref_count);
+    UVM_ASSERT(gpu0->parent->peer_copy_mode == gpu1->parent->peer_copy_mode);
+
+    if (gpu0->parent->peer_copy_mode == UVM_GPU_PEER_COPY_MODE_UNSUPPORTED)
         return;
 
     sorted = uvm_id_value(gpu0->id) < uvm_id_value(gpu1->id);
@@ -2282,7 +2287,7 @@ static void set_optimal_p2p_write_ces(const UvmGpuP2PCapsParams *p2p_caps_params
 static int nv_procfs_read_gpu_peer_caps(struct seq_file *s, void *v)
 {
     if (!uvm_down_read_trylock(&g_uvm_global.pm.lock))
-            return -EAGAIN;
+        return -EAGAIN;
 
     gpu_peer_caps_print((uvm_gpu_t **)s->private, s);
 

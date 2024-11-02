@@ -96,6 +96,10 @@
 #include <linux/cc_platform.h>
 #endif
 
+#if defined(NV_ASM_MSHYPERV_H_PRESENT) && defined(NVCPU_X86_64)
+#include <asm/mshyperv.h>
+#endif
+
 #if defined(NV_ASM_CPUFEATURE_H_PRESENT)
 #include <asm/cpufeature.h>
 #endif
@@ -184,11 +188,7 @@ struct semaphore nv_linux_devices_lock;
 
 // True if all the successfully probed devices support ATS
 // Assigned at device probe (module init) time
-NvBool nv_ats_supported = NVCPU_IS_PPC64LE
-#if defined(NV_PCI_DEV_HAS_ATS_ENABLED)
-                          || NV_TRUE
-#endif
-;
+NvBool nv_ats_supported = NV_TRUE;
 
 // allow an easy way to convert all debug printfs related to events
 // back and forth between 'info' and 'errors'
@@ -285,6 +285,17 @@ void nv_detect_conf_compute_platform(
 #if defined(NV_CC_PLATFORM_PRESENT)
     os_cc_enabled = cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT);
 
+#if defined(NV_CC_ATTR_SEV_SNP)
+    os_cc_sev_snp_enabled = cc_platform_has(CC_ATTR_GUEST_SEV_SNP);
+#endif
+
+#if defined(NV_HV_GET_ISOLATION_TYPE) && IS_ENABLED(CONFIG_HYPERV) && defined(NVCPU_X86_64)
+    if (hv_get_isolation_type() == HV_ISOLATION_TYPE_SNP)
+    {
+        os_cc_snp_vtom_enabled = NV_TRUE;
+    }
+#endif
+
 #if defined(X86_FEATURE_TDX_GUEST)
     if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
     {
@@ -293,8 +304,10 @@ void nv_detect_conf_compute_platform(
 #endif
 #else
     os_cc_enabled = NV_FALSE;
+    os_cc_sev_snp_enabled = NV_FALSE;
+    os_cc_snp_vtom_enabled = NV_FALSE;
     os_cc_tdx_enabled = NV_FALSE;
-#endif
+#endif //NV_CC_PLATFORM_PRESENT
 }
 
 static
@@ -1249,12 +1262,6 @@ static int validate_numa_start_state(nv_linux_state_t *nvl)
     }
 
     return rc;
-}
-
-NV_STATUS NV_API_CALL nv_get_num_dpaux_instances(nv_state_t *nv, NvU32 *num_instances)
-{
-    *num_instances = nv->num_dpaux_instance;
-    return NV_OK;
 }
 
 void NV_API_CALL

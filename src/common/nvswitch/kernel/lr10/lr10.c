@@ -4075,7 +4075,9 @@ nvswitch_ctrl_get_nvlink_status_lr10
         }
         else
         {
-            nvlink_lib_discover_and_get_remote_conn_info(link, &conn_info, NVLINK_STATE_CHANGE_SYNC);
+            nvlink_lib_discover_and_get_remote_conn_info(link, &conn_info,
+                                                         NVLINK_STATE_CHANGE_SYNC,
+                                                         NV_FALSE);
         }
 
         // Set NVLINK per-link caps
@@ -8182,6 +8184,44 @@ nvswitch_tnvl_get_status_lr10
 {
     // Not supported in LR10
     return -NVL_ERR_NOT_SUPPORTED;
+}
+
+NvlStatus
+nvswitch_send_tnvl_prelock_cmd_lr10
+(
+    nvswitch_device *device
+)
+{
+   return -NVL_ERR_NOT_SUPPORTED;
+}
+
+void
+nvswitch_tnvl_disable_interrupts_lr10
+(
+    nvswitch_device *device
+)
+{
+    return;
+}
+
+void
+nvswitch_reg_write_32_lr10
+(
+    nvswitch_device *device,
+    NvU32 offset,
+    NvU32 data
+)
+{
+    if (device->nvlink_device->pciInfo.bars[0].pBar == NULL)
+    {
+        NVSWITCH_PRINT(device, ERROR,
+            "%s: register write failed at offset 0x%x\n",
+            __FUNCTION__, offset);
+        return;
+    }
+
+    // Write the register
+    nvswitch_os_mem_write32((NvU8 *)device->nvlink_device->pciInfo.bars[0].pBar + offset, data);
 }
 
 //

@@ -80,7 +80,15 @@ confComputeApiCtrlCmdSystemGetCapabilities_IMPL
     if ((sysGetStaticConfig(pSys))->bOsCCEnabled)
     {
         pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_AMD_SEV;
-        if ((sysGetStaticConfig(pSys))->bOsCCTdxEnabled)
+        if ((sysGetStaticConfig(pSys))->bOsCCSevSnpEnabled)
+        {
+            pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_AMD_SEV_SNP;
+        }
+        else if ((sysGetStaticConfig(pSys))->bOsCCSnpVtomEnabled)
+        {
+            pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_AMD_SNP_VTOM;
+        }
+        else if ((sysGetStaticConfig(pSys))->bOsCCTdxEnabled)
         {
             pParams->cpuCapability = NV_CONF_COMPUTE_SYSTEM_CPU_CAPABILITY_INTEL_TDX;
         }
@@ -126,6 +134,8 @@ confComputeApiCtrlCmdSystemGetCapabilities_IMPL
 
     if (pCcCaps->bMultiGpuProtectedPcieModeEnabled)
     {
+        // Do not advertise HCC as ON to callers when PPCIe is ON
+        pParams->ccFeature = NV_CONF_COMPUTE_SYSTEM_FEATURE_DISABLED;
         pParams->multiGpuMode = NV_CONF_COMPUTE_SYSTEM_MULTI_GPU_MODE_PROTECTED_PCIE;
     }
 

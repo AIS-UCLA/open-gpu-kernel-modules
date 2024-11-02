@@ -328,6 +328,7 @@ struct KernelNvlink {
     NvBool PRIVATE_FIELD(bEnableSafeModeAtLoad);
     NvBool PRIVATE_FIELD(bEnableAli);
     NvBool PRIVATE_FIELD(bFloorSwept);
+    NvU32 PRIVATE_FIELD(numPortEvents);
     NvBool PRIVATE_FIELD(bLinkTrainingDebugSpew);
     NvBool PRIVATE_FIELD(bDisableL2Mode);
     NvU32 PRIVATE_FIELD(nvlinkLinkSpeed);
@@ -445,6 +446,7 @@ struct KernelNvlink_PRIVATE {
     NvBool bEnableSafeModeAtLoad;
     NvBool bEnableAli;
     NvBool bFloorSwept;
+    NvU32 numPortEvents;
     NvBool bLinkTrainingDebugSpew;
     NvBool bDisableL2Mode;
     NvU32 nvlinkLinkSpeed;

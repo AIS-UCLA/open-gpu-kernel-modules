@@ -64,12 +64,14 @@
 #include <drm/drm_ioctl.h>
 #endif
 
-#if defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
+#if defined(NV_DRM_FBDEV_AVAILABLE)
 #include <drm/drm_aperture.h>
 #include <drm/drm_fb_helper.h>
 #endif
 
-#if defined(NV_DRM_DRM_FBDEV_GENERIC_H_PRESENT)
+#if defined(NV_DRM_DRM_FBDEV_TTM_H_PRESENT)
+#include <drm/drm_fbdev_ttm.h>
+#elif defined(NV_DRM_DRM_FBDEV_GENERIC_H_PRESENT)
 #include <drm/drm_fbdev_generic.h>
 #endif
 
@@ -124,6 +126,7 @@ static const char* nv_get_input_colorspace_name(
 
 #if defined(NV_DRM_ATOMIC_MODESET_AVAILABLE)
 
+#if defined(NV_DRM_OUTPUT_POLL_CHANGED_PRESENT)
 static void nv_drm_output_poll_changed(struct drm_device *dev)
 {
     struct drm_connector *connector = NULL;
@@ -167,6 +170,7 @@ static void nv_drm_output_poll_changed(struct drm_device *dev)
     nv_drm_connector_list_iter_end(&conn_iter);
 #endif
 }
+#endif /* NV_DRM_OUTPUT_POLL_CHANGED_PRESENT */
 
 static struct drm_framebuffer *nv_drm_framebuffer_create(
     struct drm_device *dev,
@@ -204,7 +208,9 @@ static const struct drm_mode_config_funcs nv_mode_config_funcs = {
     .atomic_check  = nv_drm_atomic_check,
     .atomic_commit = nv_drm_atomic_commit,
 
+    #if defined(NV_DRM_OUTPUT_POLL_CHANGED_PRESENT)
     .output_poll_changed = nv_drm_output_poll_changed,
+    #endif
 };
 
 static void nv_drm_event_callback(const struct NvKmsKapiEvent *event)
@@ -480,6 +486,22 @@ static int nv_drm_load(struct drm_device *dev, unsigned long flags)
         return -ENODEV;
     }
 
+#if defined(NV_DRM_FBDEV_AVAILABLE)
+    /*
+     * If fbdev is enabled, take modeset ownership now before other DRM clients
+     * can take master (and thus NVKMS ownership).
+     */
+    if (nv_drm_fbdev_module_param) {
+        if (!nvKms->grabOwnership(pDevice)) {
+            nvKms->freeDevice(pDevice);
+            NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to grab NVKMS modeset ownership");
+            return -EBUSY;
+        }
+
+        nv_dev->hasFramebufferConsole = NV_TRUE;
+    }
+#endif
+
     mutex_lock(&nv_dev->lock);
 
     /* Set NvKmsKapiDevice */
@@ -589,6 +611,15 @@ static void __nv_drm_unload(struct drm_device *dev)
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
         return;
     }
+
+    /* Release modeset ownership if fbdev is enabled */
+
+#if defined(NV_DRM_FBDEV_AVAILABLE)
+    if (nv_dev->hasFramebufferConsole) {
+        drm_atomic_helper_shutdown(dev);
+        nvKms->releaseOwnership(nv_dev->pDevice);
+    }
+#endif
 
     cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
     mutex_lock(&nv_dev->lock);
@@ -834,13 +865,18 @@ static int nv_drm_get_dpy_id_for_connector_id_ioctl(struct drm_device *dev,
                                                     struct drm_file *filep)
 {
     struct drm_nvidia_get_dpy_id_for_connector_id_params *params = data;
+    struct drm_connector *connector;
+    struct nv_drm_connector *nv_connector;
+    int ret = 0;
+
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return -EOPNOTSUPP;
+    }
+
     // Importantly, drm_connector_lookup (with filep) will only return the
     // connector if we are master, a lessee with the connector, or not master at
     // all. It will return NULL if we are a lessee with other connectors.
-    struct drm_connector *connector =
-        nv_drm_connector_lookup(dev, filep, params->connectorId);
-    struct nv_drm_connector *nv_connector;
-    int ret = 0;
+    connector = nv_drm_connector_lookup(dev, filep, params->connectorId);
 
     if (!connector) {
         return -EINVAL;
@@ -873,6 +909,11 @@ static int nv_drm_get_connector_id_for_dpy_id_ioctl(struct drm_device *dev,
     int ret = -EINVAL;
 #if defined(NV_DRM_CONNECTOR_LIST_ITER_PRESENT)
     struct drm_connector_list_iter conn_iter;
+#endif
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return -EOPNOTSUPP;
+    }
+#if defined(NV_DRM_CONNECTOR_LIST_ITER_PRESENT)
     nv_drm_connector_list_iter_begin(dev, &conn_iter);
 #endif
 
@@ -1085,6 +1126,10 @@ static int nv_drm_grant_permission_ioctl(struct drm_device *dev, void *data,
 {
     struct drm_nvidia_grant_permissions_params *params = data;
 
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return -EOPNOTSUPP;
+    }
+
     if (params->type == NV_DRM_PERMISSIONS_TYPE_MODESET) {
         return nv_drm_grant_modeset_permission(dev, params, filep);
     } else if (params->type == NV_DRM_PERMISSIONS_TYPE_SUB_OWNER) {
@@ -1249,6 +1294,10 @@ static int nv_drm_revoke_permission_ioctl(struct drm_device *dev, void *data,
                                           struct drm_file *filep)
 {
     struct drm_nvidia_revoke_permissions_params *params = data;
+
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return -EOPNOTSUPP;
+    }
 
     if (params->type == NV_DRM_PERMISSIONS_TYPE_MODESET) {
         if (!params->dpyId) {
@@ -1767,14 +1816,9 @@ void nv_drm_register_drm_device(const nv_gpu_info_t *gpu_info)
         goto failed_drm_register;
     }
 
-#if defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
+#if defined(NV_DRM_FBDEV_AVAILABLE)
     if (nv_drm_fbdev_module_param &&
         drm_core_check_feature(dev, DRIVER_MODESET)) {
-
-        if (!nvKms->grabOwnership(nv_dev->pDevice)) {
-            NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to grab NVKMS modeset ownership");
-            goto failed_grab_ownership;
-        }
 
         if (bus_is_pci) {
             struct pci_dev *pdev = to_pci_dev(device);
@@ -1785,11 +1829,13 @@ void nv_drm_register_drm_device(const nv_gpu_info_t *gpu_info)
             drm_aperture_remove_conflicting_pci_framebuffers(pdev, nv_drm_driver.name);
 #endif
         }
+        #if defined(NV_DRM_FBDEV_TTM_AVAILABLE)
+        drm_fbdev_ttm_setup(dev, 32);
+        #elif defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
         drm_fbdev_generic_setup(dev, 32);
-
-        nv_dev->hasFramebufferConsole = NV_TRUE;
+        #endif
     }
-#endif /* defined(NV_DRM_FBDEV_GENERIC_AVAILABLE) */
+#endif /* defined(NV_DRM_FBDEV_AVAILABLE) */
 
     /* Add NVIDIA-DRM device into list */
 
@@ -1797,12 +1843,6 @@ void nv_drm_register_drm_device(const nv_gpu_info_t *gpu_info)
     dev_list = nv_dev;
 
     return; /* Success */
-
-#if defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
-failed_grab_ownership:
-
-    drm_dev_unregister(dev);
-#endif
 
 failed_drm_register:
 
@@ -1870,12 +1910,6 @@ void nv_drm_remove_devices(void)
         struct nv_drm_device *next = dev_list->next;
         struct drm_device *dev = dev_list->dev;
 
-#if defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
-        if (dev_list->hasFramebufferConsole) {
-            drm_atomic_helper_shutdown(dev);
-            nvKms->releaseOwnership(dev_list->pDevice);
-        }
-#endif
         drm_dev_unregister(dev);
         nv_drm_dev_free(dev);
 
@@ -1943,12 +1977,12 @@ void nv_drm_suspend_resume(NvBool suspend)
 
         if (suspend) {
             drm_kms_helper_poll_disable(dev);
-#if defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
+#if defined(NV_DRM_FBDEV_AVAILABLE)
             drm_fb_helper_set_suspend_unlocked(dev->fb_helper, 1);
 #endif
             drm_mode_config_reset(dev);
         } else {
-#if defined(NV_DRM_FBDEV_GENERIC_AVAILABLE)
+#if defined(NV_DRM_FBDEV_AVAILABLE)
             drm_fb_helper_set_suspend_unlocked(dev->fb_helper, 0);
 #endif
             drm_kms_helper_poll_enable(dev);

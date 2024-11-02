@@ -2522,6 +2522,7 @@ _controllerParseStaticTable_v22
 
     switch (header.version)
     {
+        case NVPCF_CONTROLLER_STATIC_TABLE_VERSION_24:
         case NVPCF_CONTROLLER_STATIC_TABLE_VERSION_23:
         case NVPCF_CONTROLLER_STATIC_TABLE_VERSION_22:
         {
@@ -4476,6 +4477,23 @@ cliresCtrlCmdSyncGpuBoostGroupInfo_IMPL
     NV_ASSERT(NV_OK == status);
     return status;
 }
+
+NV_STATUS
+cliresCtrlCmdVgpuVfioNotifyRMStatus_IMPL
+(
+    RmClientResource *pRmCliRes,
+    NV0000_CTRL_VGPU_VFIO_NOTIFY_RM_STATUS_PARAMS *pVgpuStatusParams
+)
+{
+
+    if (osIsVgpuVfioPresent() != NV_OK)
+        return NV_ERR_NOT_SUPPORTED;
+
+    osWakeRemoveVgpu(pVgpuStatusParams->gpuId, pVgpuStatusParams->returnStatus);
+
+    return NV_OK;
+}
+
 
 NV_STATUS
 cliresCtrlCmdVgpuGetVgpuVersion_IMPL
