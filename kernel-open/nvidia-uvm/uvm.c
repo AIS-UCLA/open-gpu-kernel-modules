@@ -127,9 +127,9 @@ static NV_STATUS uvm_api_mm_initialize(UVM_MM_INITIALIZE_PARAMS *params, struct 
         goto err;
     }
 
-    old_fd_type = nv_atomic_long_cmpxchg((atomic_long_t *)&filp->private_data,
-                                         UVM_FD_UNINITIALIZED,
-                                         UVM_FD_INITIALIZING);
+    old_fd_type = atomic_long_cmpxchg((atomic_long_t *)&filp->private_data,
+                                      UVM_FD_UNINITIALIZED,
+                                      UVM_FD_INITIALIZING);
     old_fd_type &= UVM_FD_TYPE_MASK;
     if (old_fd_type != UVM_FD_UNINITIALIZED) {
         status = NV_ERR_IN_USE;
@@ -682,6 +682,9 @@ static void uvm_vm_open_semaphore_pool(struct vm_area_struct *vma)
     // Semaphore pool vmas do not have vma wrappers, but some functions will
     // assume vm_private_data is a wrapper.
     vma->vm_private_data = NULL;
+#if defined(VM_WIPEONFORK)
+    nv_vm_flags_set(vma, VM_WIPEONFORK);
+#endif
 
     if (is_fork) {
         // If we forked, leave the parent vma alone.
@@ -914,8 +917,9 @@ static NV_STATUS uvm_api_initialize(UVM_INITIALIZE_PARAMS *params, struct file *
     // attempt to be made. This is safe because other threads will have only had
     // a chance to observe UVM_FD_INITIALIZING and not UVM_FD_VA_SPACE in this
     // case.
-    old_fd_type = nv_atomic_long_cmpxchg((atomic_long_t *)&filp->private_data,
-                                         UVM_FD_UNINITIALIZED, UVM_FD_INITIALIZING);
+    old_fd_type = atomic_long_cmpxchg((atomic_long_t *)&filp->private_data,
+                                      UVM_FD_UNINITIALIZED,
+                                      UVM_FD_INITIALIZING);
     old_fd_type &= UVM_FD_TYPE_MASK;
     if (old_fd_type == UVM_FD_UNINITIALIZED) {
         status = uvm_va_space_create(filp->f_mapping, &va_space, params->flags);

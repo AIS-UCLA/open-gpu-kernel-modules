@@ -493,7 +493,6 @@ gpuIsProtectedPcieEnabledInHw_GH100
     OBJGPU *pGpu
 )
 {
-    // Bug 4870925: Disabled PPCIE
     return NV_FALSE;
 }
 

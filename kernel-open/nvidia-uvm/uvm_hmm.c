@@ -73,6 +73,24 @@ module_param(uvm_disable_hmm, bool, 0444);
 #include "uvm_va_policy.h"
 #include "uvm_tools.h"
 
+// The function nv_PageSwapCache() wraps the check for page swap cache flag in
+// order to support a wide variety of kernel versions.
+// The function PageSwapCache() is removed after 32f51ead3d77 ("mm: remove
+// PageSwapCache") in v6.12-rc1.
+// The function folio_test_swapcache() was added in Linux 5.16 (d389a4a811551
+// "mm: Add folio flag manipulation functions")
+// Systems with HMM patches backported to 5.14 are possible, but those systems
+// do not include folio_test_swapcache()
+// TODO: Bug 4050579: Remove this when migration of swap cached pages is updated
+static __always_inline bool nv_PageSwapCache(struct page *page)
+{
+#if defined(NV_FOLIO_TEST_SWAPCACHE_PRESENT)
+    return folio_test_swapcache(page_folio(page));
+#else
+    return PageSwapCache(page);
+#endif
+}
+
 static NV_STATUS gpu_chunk_add(uvm_va_block_t *va_block,
                                uvm_page_index_t page_index,
                                struct page *page);
@@ -145,7 +163,7 @@ static uvm_va_block_t *hmm_va_block_from_node(uvm_range_tree_node_t *node)
 // Copies the contents of the source device-private page to the
 // destination CPU page. This will invalidate mappings, so cannot be
 // called while holding any va_block locks.
-static void hmm_copy_devmem_page(struct page *dst_page, struct page *src_page)
+static NV_STATUS hmm_copy_devmem_page(struct page *dst_page, struct page *src_page)
 {
     uvm_tracker_t tracker = UVM_TRACKER_INIT();
     uvm_gpu_phys_address_t src_addr;
@@ -166,7 +184,7 @@ static void hmm_copy_devmem_page(struct page *dst_page, struct page *src_page)
     gpu = uvm_gpu_chunk_get_gpu(gpu_chunk);
     status = uvm_mmu_chunk_map(gpu_chunk);
     if (status != NV_OK)
-        goto out_zero;
+        goto out;
 
     status = uvm_parent_gpu_map_cpu_pages(gpu->parent, dst_page, PAGE_SIZE, &dma_addr);
     if (status != NV_OK)
@@ -189,7 +207,7 @@ static void hmm_copy_devmem_page(struct page *dst_page, struct page *src_page)
     uvm_push_end(&push);
     status = uvm_tracker_add_push_safe(&tracker, &push);
     if (status == NV_OK)
-        uvm_tracker_wait_deinit(&tracker);
+        status = uvm_tracker_wait_deinit(&tracker);
 
 out_unmap_cpu:
     uvm_parent_gpu_unmap_cpu_pages(gpu->parent, dma_addr, PAGE_SIZE);
@@ -197,13 +215,8 @@ out_unmap_cpu:
 out_unmap_gpu:
     uvm_mmu_chunk_unmap(gpu_chunk, NULL);
 
-out_zero:
-    // We can't fail eviction because we need to free the device-private pages
-    // so the GPU can be unregistered. So the best we can do is warn on any
-    // failures and zero the uninitialised page. This could result in data loss
-    // in the application but failures are not expected.
-    if (WARN_ON(status != NV_OK))
-        memzero_page(dst_page, 0, PAGE_SIZE);
+out:
+    return status;
 }
 
 static NV_STATUS uvm_hmm_pmm_gpu_evict_pfn(unsigned long pfn)
@@ -227,7 +240,13 @@ static NV_STATUS uvm_hmm_pmm_gpu_evict_pfn(unsigned long pfn)
         }
 
         lock_page(dst_page);
-        hmm_copy_devmem_page(dst_page, migrate_pfn_to_page(src_pfn));
+
+        // We can't fail eviction because we need to free the device-private
+        // pages so the GPU can be unregistered. So the best we can do is warn
+        // on any failures and zero the uninitialized page. This could result
+        // in data loss in the application but failures are not expected.
+        if (hmm_copy_devmem_page(dst_page, migrate_pfn_to_page(src_pfn)) != NV_OK)
+            memzero_page(dst_page, 0, PAGE_SIZE);
         dst_pfn = migrate_pfn(page_to_pfn(dst_page));
         migrate_device_pages(&src_pfn, &dst_pfn, 1);
     }
@@ -2698,7 +2717,7 @@ static NV_STATUS dmamap_src_sysmem_pages(uvm_va_block_t *va_block,
                 continue;
             }
 
-            if (PageSwapCache(src_page)) {
+            if (nv_PageSwapCache(src_page)) {
                 // TODO: Bug 4050579: Remove this when swap cached pages can be
                 // migrated.
                 status = NV_WARN_MISMATCHED_TARGET;
@@ -3468,12 +3487,17 @@ NV_STATUS uvm_hmm_remote_cpu_fault(struct vm_fault *vmf)
         lock_page(dst_page);
         dst_pfn = migrate_pfn(page_to_pfn(dst_page));
 
-        hmm_copy_devmem_page(dst_page, src_page);
+        status = hmm_copy_devmem_page(dst_page, src_page);
+        if (status != NV_OK) {
+            unlock_page(dst_page);
+            __free_page(dst_page);
+            dst_pfn = 0;
+        }
     }
 
-    migrate_vma_pages(&args);
-
 out:
+    if (status == NV_OK)
+        migrate_vma_pages(&args);
     migrate_vma_finalize(&args);
 
     return status;
